@@ -1,0 +1,365 @@
+#!/bin/bash
+# You must provide settings for these:
+# <UDF name="CLUSTER_CA_CERT" Label="Cluster CA certificate" default="" example="Base 64 encoding of PEM"/>
+# <UDF name="MINION_CERT" Label="Minion client/server certificate" default="" example="Base 64 encoding of PEM"/>
+# <UDF name="MINION_KEY" Label="Minion client/server private key" default="" example="Base 64 encoding of PEM"/>
+# <UDF name="SSH_KEY" Label="SSH key for access to node" default="" example="ssh-ed25519 AAAAyylmao4df870safrotflolUlj"/>
+# <UDF name="PUBLIC_IP" Label="Public IP of node" default="" example="192.0.2.1"/>
+# <UDF name="PRIVATE_IP" Label="Private IP of node" default="" example="198.51.100.77"/>
+# <UDF name="PRIVATE_DNS" Label="DNS name for node's private IP" default="" example="li-69.members.linode.com"/>
+# <UDF name="ETCD2_TOKEN" Label="etcd2 discovery token" default="" example=""/>
+# <UDF name="MASTER_IP" Label="Private IP of master node" default="" example="198.51.100.74"/>
+#
+# Optionally, give the node a name:
+# <UDF name="NODE_NAME" Label="Node hostname" default="" example="bob"/>
+#
+# For a master node, also provide:
+# <UDF name="NODE_TYPE" Label="Whether to configure a master or minion" default="minion" example="true" oneOf="minion,master"/>
+#
+# The following settings only need to be changed if you have specific requirements
+# <UDF name="KUBE_VERSION" Label="Kubernetes version" default="v1.4.4" example="v1.4.4"/>
+# <UDF name="CLUSTER_NAME" Label="Kubernetes cluster name" default="k8s" example="my_new_cluster"/>
+# <UDF name="CLUSTER_NETWORK" Label="CIDR block for cluster network" default="10.1.0.0/16" example="10.1.0.0/16"/>
+# <UDF name="SUBNET_SIZE" Label="Subnet size per Kubernetes node" default="22" example="24"/>
+# <UDF name="SERVICE_NETWORK" Label="CIDR block for cluster services" default="10.2.0.0/16" example="10.2.0.0/16"/>
+# <UDF name="CLUSTER_DNS" Label="Cluster IP for DNS service" default="10.2.3.4" example="10.2.3.4"/>
+
+# UDF defaults aren't set for you
+: ${KUBE_VERSION:=v1.4.4}
+: ${CLUSTER_NAME:=k8s}
+: ${CLUSTER_NETWORK:=10.1.0.0/16}
+: ${SUBNET_SIZE:=22}
+: ${SERVICE_NETWORK:=10.2.0.0/16}
+: ${CLUSTER_DNS:=10.2.3.4}
+: ${NODE_TYPE:=minion}
+
+GATEWAY=${PUBLIC_IP%.*}.1
+
+cd root
+cat > cloud-config.yaml <<-EOF
+	#cloud-config
+	ssh_authorized_keys:
+	  - "$SSH_KEY"
+	EOF
+
+if [ "$NODE_NAME" != "" ] ; then
+    cat >> cloud-config.yaml <<-EOF
+	hostname: $NODE_NAME
+	EOF
+fi
+
+cat >> cloud-config.yaml <<-EOF
+	write_files:
+	  - path: "/etc/systemd/network/10-static.network"
+	    permissions: 0644
+	    owner: root:root
+	    content: |
+	      [Match]
+	      Name=eth0
+	      [Network]
+	      DHCP=no
+	      Address=$PUBLIC_IP/24
+	      Address=$PRIVATE_IP/17
+	      Gateway=$GATEWAY
+	      DNS=45.33.58.84
+	      DNS=74.207.241.5
+	      DNS=74.207.242.5
+	  - path: "/var/lib/iptables/rules-save"
+	    permissions: 0644
+	    owner: root:root
+	    content: |
+	      *filter
+	      :INPUT ACCEPT [0:0]
+	      :FORWARD ACCEPT [0:0]
+	      :OUTPUT ACCEPT [0:0]
+	      -A INPUT -i flannel.+ -p tcp -m tcp --dport 10250 -j ACCEPT
+	      -A INPUT -i lo -p tcp -m tcp --dport 10250 -j ACCEPT
+	      -A INPUT -p tcp -m tcp --dport 10250 -j REJECT --reject-with icmp-port-unreachable
+	      COMMIT
+	  - path: /opt/k8s/etc/kubeconfig
+	    permissions: 0600
+	    owner: root:root
+	    content: |
+	      apiVersion: v1
+	      kind: Config
+	      preferences: {}
+	      clusters:
+	      - name: $CLUSTER_NAME
+	        cluster:
+	          certificate-authority-data: $CLUSTER_CA_CERT
+	          server: https://$MASTER_IP:6443/
+	      contexts:
+	      - name: default
+	        context:
+	          cluster: $CLUSTER_NAME
+	          user: k8s
+	      current-context: default
+	      users:
+	      - name: k8s
+	        user:
+	          client-certificate-data: $MINION_CERT
+	          client-key-data: $MINION_KEY
+	  - path: /etc/ssl/etcd-certs.sh
+	    permissions: 0700
+	    owner: root:root
+	    content: |
+	      #!/bin/sh
+	      mkdir -p /etc/ssl/etcd /opt/k8s/ssl
+	      echo '$CLUSTER_CA_CERT' | base64 -d > /etc/ssl/etcd/ca.cert.pem
+	      echo '$MINION_CERT' | base64 -d > /etc/ssl/etcd/etcd.cert.pem
+	      echo '$MINION_KEY' | base64 -d > /etc/ssl/etcd/etcd.key.pem
+	      cp /etc/ssl/etcd/ca.cert.pem /opt/k8s/ssl/ca.cert.pem
+	      for t in cert key ; do
+	          cp /etc/ssl/etcd/etcd.\$t.pem /opt/k8s/ssl/node.\$t.pem
+	      done
+	      chmod 0600 /etc/ssl/etcd/*.pem
+	      chown etcd:etcd /etc/ssl/etcd/*.pem
+	      chmod 0600 /opt/k8s/ssl/*.pem
+	  - path: /opt/k8s/manifest/proxy.yaml
+	    owner: root:root
+	    content: |
+	      apiVersion: v1
+	      kind: Pod
+	      metadata:
+	        name: kube-proxy
+	        namespace: kube-system
+	      spec:
+	        hostNetwork: true
+	        containers:
+	        - name: kube-proxy
+	          image: gcr.io/google_containers/kube-proxy:$KUBE_VERSION
+	          command:
+	          - /usr/local/bin/kube-proxy
+	          - --kubeconfig=/etc/kubernetes/kubeconfig
+	          - --cluster-cidr=$CLUSTER_NETWORK
+	          securityContext:
+	            privileged: true
+	          volumeMounts:
+	          - mountPath: /etc/kubernetes
+	            name: kubernetes-conf
+	            readOnly: true
+	        volumes:
+	        - name: kubernetes-conf
+	          hostPath:
+	            path: /opt/k8s/etc
+	EOF
+
+if [ "$NODE_TYPE" == "master" ] ; then
+    cat >> cloud-config.yaml <<-EOF
+	  - path: /opt/k8s/manifest/apiserver.yaml
+	    owner: root:root
+	    content: |
+	      apiVersion: v1
+	      kind: Pod
+	      metadata:
+	        name: kube-apiserver
+	        namespace: kube-system
+	      spec:
+	        hostNetwork: true
+	        containers:
+	        - name: kube-apiserver
+	          image: gcr.io/google_containers/kube-apiserver:$KUBE_VERSION
+	          command:
+	          - /usr/local/bin/kube-apiserver
+	          - --bind-address=0.0.0.0
+	          - --etcd-servers=http://127.0.0.1:4001
+	          - --allow-privileged=true
+	          - --service-cluster-ip-range=$SERVICE_NETWORK
+	          - --secure-port=6443
+	          - --advertise-address=$MASTER_IP
+	          - --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,ResourceQuota
+	          - --tls-cert-file=/etc/kubernetes/ssl/node.cert.pem
+	          - --tls-private-key-file=/etc/kubernetes/ssl/node.key.pem
+	          - --client-ca-file=/etc/kubernetes/ssl/ca.cert.pem
+	          - --service-account-key-file=/etc/kubernetes/ssl/serviceaccount.key.pem
+	          - --runtime-config=extensions/v1beta1=true,extensions/v1beta1/networkpolicies=true
+	          ports:
+	          - containerPort: 6443
+	            hostPort: 6443
+	            name: https
+	          - containerPort: 8080
+	            hostPort: 8080
+	            name: local
+	          volumeMounts:
+	          - mountPath: /etc/kubernetes/ssl
+	            name: ssl-certs-kubernetes
+	            readOnly: true
+	        volumes:
+	        - name: ssl-certs-kubernetes
+	          hostPath:
+	            path: /opt/k8s/ssl
+	  - path: /opt/k8s/manifest/controller-manager.yaml
+	    owner: root:root
+	    content: |
+	      apiVersion: v1
+	      kind: Pod
+	      metadata:
+	        name: kube-controller-manager
+	        namespace: kube-system
+	      spec:
+	        hostNetwork: true
+	        containers:
+	        - name: kube-controller-manager
+	          image: gcr.io/google_containers/kube-controller-manager:$KUBE_VERSION
+	          command:
+	          - /usr/local/bin/kube-controller-manager
+	          - --master=http://127.0.0.1:8080
+	          - --leader-elect=true
+	          - --service-account-private-key-file=/etc/kubernetes/ssl/serviceaccount.key.pem
+	          - --root-ca-file=/etc/kubernetes/ssl/ca.cert.pem
+	          volumeMounts:
+	          - mountPath: /etc/kubernetes/ssl
+	            name: ssl-certs-kubernetes
+	            readOnly: true
+	          livenessProbe:
+	            httpGet:
+	              host: 127.0.0.1
+	              port: 10252
+	              path: /healthz
+	            initialDelaySeconds: 15
+	            timeoutSeconds: 15
+	        volumes:
+	        - name: ssl-certs-kubernetes
+	          hostPath:
+	            path: /opt/k8s/ssl
+	  - path: /opt/k8s/manifest/scheduler.yaml
+	    owner: root:root
+	    content: |
+	      apiVersion: v1
+	      kind: Pod
+	      metadata:
+	        name: kube-scheduler
+	        namespace: kube-system
+	      spec:
+	        hostNetwork: true
+	        containers:
+	        - name: kube-scheduler
+	          image: gcr.io/google_containers/kube-scheduler:$KUBE_VERSION
+	          command:
+	          - /usr/local/bin/kube-scheduler
+	          - --master=http://127.0.0.1:8080
+	          livenessProbe:
+	            httpGet:
+	              host: 127.0.0.1
+	              port: 10251
+	              path: /healthz
+	            initialDelaySeconds: 15
+	            timeoutSeconds: 15
+	EOF
+fi
+
+cat >> cloud-config.yaml <<-EOF
+	coreos:
+	  etcd2:
+	    discovery: https://discovery.etcd.io/$ETCD2_TOKEN
+	    listen-client-urls: http://127.0.0.1:2379,http://127.0.0.1:4001
+	    advertise-client-urls: http://127.0.0.1:2379,http://127.0.0.1:4001
+	    initial-advertise-peer-urls: https://$PRIVATE_IP:2380
+	    listen-peer-urls: https://$PRIVATE_IP:2380
+	  flannel:
+	    ip_masq: true
+	    public-ip: $PRIVATE_IP
+	  update:
+	    reboot-strategy: etcd-lock
+	  units:
+	  - name: systemd-networkd.service
+	    command: restart
+	  - name: sshd.socket
+	    content: |
+	      [Socket]
+	      ListenStream=20535
+	      FreeBind=true
+	      Accept=yes
+	  - name: iptables-restore.service
+	    enable: true
+	    command: start
+	  - name: write-certificates.service
+	    command: start
+	    content: |
+	      [Unit]
+	      Description=Write service certificates into /etc/ssl/*
+	      [Service]
+	      ExecStart=-/bin/sh /etc/ssl/etcd-certs.sh
+	      RemainAfterExit=yes
+	      Type=oneshot
+	  - name: etcd2.service
+	    command: start
+	    drop-ins:
+	    - name: 30-certificates.conf
+	      content: |
+	        [Service]
+	        Environment=ETCD_PEER_CA_FILE=/etc/ssl/etcd/ca.cert.pem
+	        Environment=ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/etcd/ca.cert.pem
+	        Environment=ETCD_PEER_CERT_FILE=/etc/ssl/etcd/etcd.cert.pem
+	        Environment=ETCD_PEER_KEY_FILE=/etc/ssl/etcd/etcd.key.pem
+	  - name: generate-serviceaccount-key.service
+	    command: start
+	    content: |
+	      [Unit]
+	      Description=Generate service-account key file
+	      [Service]
+	      ExecStartPre=-/usr/bin/mkdir -p /opt/k8s/ssl
+	      ExecStart=/bin/openssl genrsa -out /opt/k8s/ssl/serviceaccount.key.pem 2048 2>/dev/null
+	      RemainAfterExit=yes
+	      Type=oneshot
+	  - name: flanneld.service
+	    command: restart
+	    drop-ins:
+	    - name: 50-flanneld.conf
+	      content: |
+	        [Unit]
+	        Requires=etcd2.service
+	        After=etcd2.service
+	        [Service]
+	        Restart=always
+	        ExecStartPre=-/usr/bin/etcdctl mk /coreos.com/network/config '{"Network":"$CLUSTER_NETWORK", "SubnetLen":$SUBNET_SIZE, "Backend": {"Type": "vxlan"}}'
+	  - name: docker.service
+	    command: restart
+	    drop-ins:
+	    - name: 50-docker-depends.service
+	      content: |
+	        [Unit]
+	        Requires=flanneld.service
+	        After=flanneld.service
+	        [Service]
+	        Restart=always
+	  - name: kubelet.service
+	    command: start
+	    content: |
+	      [Unit]
+	      Description=Kubernetes kubelet
+	      Requires=docker.service
+	      After=docker.service
+	      [Service]
+	      Restart=always
+	      ExecStartPre=-/usr/bin/mkdir -p /opt/k8s/bin
+	      ExecStartPre=-/usr/bin/curl -Lo /opt/k8s/bin/kubelet \
+	            https://storage.googleapis.com/kubernetes-release/release/$KUBE_VERSION/bin/linux/amd64/kubelet
+	      ExecStartPre=-/usr/bin/chmod +x /opt/k8s/bin/kubelet
+	      ExecStart=/opt/k8s/bin/kubelet \
+	          --kubeconfig=/opt/k8s/etc/kubeconfig \
+	          --require-kubeconfig=true \
+	          --allow-privileged=true \
+	          --pod-manifest-path=/opt/k8s/manifest \
+	          --cluster-dns=$CLUSTER_DNS \
+	          --cluster-domain=cluster.local \
+	          --hostname-override=$PRIVATE_DNS
+EOF
+if [ "$NODE_TYPE" == "master" ] ; then
+    cat >> cloud-config.yaml <<-EOF
+	EOF
+fi
+
+echo "cloud-config.yaml generated"
+apt-get -y install gawk
+wget --quiet https://raw.githubusercontent.com/coreos/init/master/bin/coreos-install
+chmod u+x coreos-install
+# core-os.com has broken IPv6
+sysctl net.ipv6.conf.eth0.disable_ipv6=1
+./coreos-install -d /dev/sda -c cloud-config.yaml -v
+reboot
+
+# TODO:
+# dockerd is starting its own bridge, not using flannel.1, and starting before flanneld
+# etcd2 listening for peers on empty IP address
+# etcd2 using http not https, etcd2 not joining cluster: startup snafu?
