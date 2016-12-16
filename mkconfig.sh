@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Configuration block
-CLUSTER_NAME=linode             # Or whatever you like
-DATACENTER_ID=3                 # Fremont, CA
-MASTER_PLAN=2                   # Linode4096, 2 cores, 4G RAM, 3TB transfer, 48GB disk
-MINION_PLAN=6                   # Linode12288, 6 cores, 12G RAM, 8TB transfer, 192GB disk
-NODE_COUNT=3                    # One master, three minions
-PUBLIC_DNS=kube.example.com     # Public DNS label for API server
+DATACENTER_ID=3                                  # Fremont, CA
+CLUSTER_NAME=${DATACENTER_ID}_linode             # Or whatever you like
+MASTER_PLAN=2                                    # Linode4096, 2 cores, 4G RAM, 3TB transfer, 48GB disk
+MINION_PLAN=6                                    # Linode12288, 6 cores, 12G RAM, 8TB transfer, 192GB disk
+NODE_COUNT=3                                     # One master, three minions
+PUBLIC_DNS=kube.example.com                      # Public DNS label for API server
 API_TOKEN=$( security find-internet-password -s api.linode.com -w )
 
 # http://despicableme.wikia.com/wiki/Category:Minions
@@ -82,9 +82,9 @@ fi
 # Create all nodes
 api_call linode.create DatacenterID=$DATACENTER_ID PlanID=$MASTER_PLAN
 MASTER_ID=$( jqo .DATA.LinodeID )
-api_call linode.update LinodeID=$MASTER_ID Label="master_gru" lpm_displayGroup="Kubernetes Cluster"
+api_call linode.update LinodeID=$MASTER_ID Label="${CLUSTER_NAME}_master_gru" lpm_displayGroup="Kubernetes Cluster"
 echo "[$MASTER_ID] master gru created with plan $MASTER_PLAN"
-eval NAME_$MASTER_ID=gru
+eval NAME_$MASTER_ID=${CLUSTER_NAME}_gru
 MINION_IDS=()
 for minion in `seq $NODE_COUNT` ; do
     api_call linode.create DatacenterID=$DATACENTER_ID PlanID=$MINION_PLAN
@@ -92,8 +92,8 @@ for minion in `seq $NODE_COUNT` ; do
     MINION_IDS+=( $MINION_ID )
     MINION_NAME=${MINION_NAMES[$minion]}
     eval NAME_$MINION_ID=$MINION_NAME
-    api_call linode.update LinodeID=$MINION_ID Label="minion_$MINION_NAME" lpm_displayGroup="Kubernetes Cluster"
-    echo "[$MINION_ID] minion $MINION_NAME created with plan $MINION_PLAN"
+    api_call linode.update LinodeID=$MINION_ID Label="${CLUSTER_NAME}_minion_$MINION_NAME" lpm_displayGroup="Kubernetes Cluster"
+    echo "[$MINION_ID] minion ${CLUSTER_NAME}_minion_$MINION_NAME created with plan $MINION_PLAN"
 done
 
 for NODE in $MASTER_ID ${MINION_IDS[@]} ; do

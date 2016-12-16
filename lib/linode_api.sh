@@ -9,7 +9,7 @@ function api_errors () {
 }
 
 function api_call() {
-    args=(-d "api_key=$TOKEN" -d "api_action=$1") ; shift
+    args=(-d "api_key=$API_TOKEN" -d "api_action=$1") ; shift
     for arg in "$@" ; do
         args+=(--data-urlencode "$arg")
     done
