@@ -63,20 +63,19 @@ fi
 CA_CERTIFICATE=$( base64 < ca/certs/ca.cert.pem )
 
 # Look for existing stack script
-if [ -f ../.stack-script-id ] ; then
-    SCRIPT_ID=$( cat ../.stack-script-id )
-    # Attempt to udpate it
-    if ! ERROR=$(api_call stackscript.update StackScriptID="${SCRIPT_ID}" script@../install-kubes.script) ; then
-        api_call stackscript.create DistributionIDList=140 \
-            Label=Install\ Kubernetes \
-            isPublic=false \
-            script@../install-kubes.script
-        SCRIPT_ID=$( jqo .DATA.StackScriptID )
-        echo "$SCRIPT_ID" > ../.stack-script-id
-        echo "Created new StackScript #$SCRIPT_ID"
-    else
-        echo "Updated existing StackScript #$SCRIPT_ID"
-    fi
+SCRIPT_ID=$( cat ../.stack-script-id )
+
+# Attempt to udpate it
+if ! ERROR=$(api_call stackscript.update StackScriptID="${SCRIPT_ID}" script@../install-kubes.script) ; then
+    api_call stackscript.create DistributionIDList=140 \
+        Label=Install\ Kubernetes \
+        isPublic=false \
+        script@../install-kubes.script
+    SCRIPT_ID=$( jqo .DATA.StackScriptID )
+    echo "$SCRIPT_ID" > ../.stack-script-id
+    echo "Created new StackScript #$SCRIPT_ID"
+else
+    echo "Updated existing StackScript #$SCRIPT_ID"
 fi
 
 # Create all nodes
