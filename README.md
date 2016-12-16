@@ -81,7 +81,7 @@ DNS.
 ### Default settings
 
 ```bash
-CLUSTER_NAME=linode           # A largely internal matter
+CLUSTER_NAME=linode           # A largely internal matter, but marks the minion-names uniquely in linode flat namespace
 DATACENTER_ID=3               # Fremont, CA
 MASTER_PLAN=2                 # Linode4096
 MINION_PLAN=6                 # Linode12288
@@ -91,11 +91,21 @@ PUBLIC_DNS=kube.example.com   # Public DNS label for API server
 API_TOKEN=$( security find-internet-password -s api.linode.com -w )
 ```
 
+### Pre-install
+
+#### get an API key, get a good one.
+
 I strongly recommend that you create a fresh [API key] for this procedure, with
 the minimum possible age limit.  As Linode API keys give full access to the
 owner's account, they are potentially dangerous, and it's more fun to create
 fresh API keys every time you need to tweak and re-run the script than it is to
 deal with runaway costs if someone compromises your Linode account.
+
+#### Where can you play? your api key can tell you
+
+```curl -s "https://api.linode.com/?api_key=$( security find-internet-password -s api.linode.com -w )&api_action=avail.datacenters" | jq```
+
+will fetch a nice list of the _current_ datacenters, so you can find the index value to use in ```DATACENTER_ID``` above
 
 ### The install procedure
 
