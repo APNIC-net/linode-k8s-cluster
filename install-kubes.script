@@ -17,7 +17,7 @@
 # <UDF name="NODE_TYPE" Label="Whether to configure a master or minion" default="minion" example="true" oneOf="minion,master"/>
 #
 # The following settings only need to be changed if you have specific requirements
-# <UDF name="KUBE_VERSION" Label="Kubernetes version" default="v1.5.1" example="v1.4.4"/>
+# <UDF name="KUBE_VERSION" Label="Kubernetes version" default="v1.5.1" example="v1.5.1"/>
 # <UDF name="CLUSTER_NAME" Label="Kubernetes cluster name" default="k8s" example="my_new_cluster"/>
 # <UDF name="CLUSTER_NETWORK" Label="CIDR block for cluster network" default="10.1.0.0/16" example="10.1.0.0/16"/>
 # <UDF name="SUBNET_SIZE" Label="Subnet size per Kubernetes node" default="22" example="24"/>
@@ -25,7 +25,7 @@
 # <UDF name="CLUSTER_DNS" Label="Cluster IP for DNS service" default="10.2.3.4" example="10.2.3.4"/>
 
 # UDF defaults aren't set for you
-: ${KUBE_VERSION:=v1.4.4}
+: ${KUBE_VERSION:=v1.5.1}
 : ${CLUSTER_NAME:=k8s}
 : ${CLUSTER_NETWORK:=10.1.0.0/16}
 : ${SUBNET_SIZE:=22}
